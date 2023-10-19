@@ -1,0 +1,16 @@
+{
+    "headsets": [
+        {
+            "id": 0,
+            "mac": "AA:BB:CC:DD:EE:FF",
+            "name": "Headset 1",
+            "ip": ""
+        },
+        {
+            "id": 1,
+            "mac": "FF:EE:DD:CC:BB:AA",
+            "name": "Headset 2",
+            "ip": ""
+        }
+    ]
+}
