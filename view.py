@@ -10,6 +10,7 @@ from argparse import ArgumentParser
 
 adb = adbutils.AdbClient(host="127.0.0.1", port=5037)
 lastkey = None
+started = False
 
 fps = "30"
 bitrate = "1M"
@@ -51,7 +52,18 @@ AdbDevices = []
 
 def on_press(key):
     global lastkey
+    global started
     lastkey = key
+
+    if started:
+        if hasattr(key, "vk") and 96 <= key.vk <= 105:
+            id = key.vk - 96
+            # Searching for device ID corresponding to the key that's been pressed (1 to 9)
+            for device in AdbDevices:
+                if device.id == id:
+                    # Restart the video connection to that device
+                    restartScrcpy(device=device)
+                    break
 
 
 def on_release(key):
@@ -75,7 +87,7 @@ class AdbDevice:
 
     def startScrCpy(self):
         self.scrspyproc = subprocess.Popen(
-            ".\scrcpy\scrcpy.exe -n --window-borderless --no-audio --video-codec=h265 --crop "
+            ".\scrcpy\scrcpy.exe -n --window-borderless --disable-screensaver --no-audio --video-codec=h265 --crop "
             + crop
             + " --max-fps="
             + fps
@@ -193,21 +205,39 @@ def reconnectToLastIp():
         print("No devices found.")
 
 
+def restartScrcpy(device: AdbDevice):
+    print("Restarting video for " + device.name)
+    stopScrcpy(device)
+    adb.disconnect(addr=device.ip)
+    adb.connect(addr=device.ip, timeout=5)
+    startScrcpy(device)
+
+
 def updateIpAdresses():
     json_object = json.dumps(JsonDevices, indent=4)
     with open("headsets.json", "w") as outfile:
         outfile.write(json_object)
 
 
-def startScrcpy():
-    for device in AdbDevices:
-        device.startScrCpy()
-        time.sleep(1)
+def startScrcpy(adbdevice=None):
+    if adbdevice is None:
+        for device in AdbDevices:
+            device.startScrCpy()
+            print("Started video for " + device.name)
+            time.sleep(1)
+        return
+    adbdevice.startScrCpy()
+    print("Started video for " + adbdevice.name)
 
 
-def stopScrcpy():
-    for device in AdbDevices:
-        device.scrspyproc.kill()
+def stopScrcpy(adbdevice=None):
+    if adbdevice is None:
+        for device in AdbDevices:
+            device.scrspyproc.kill()
+            print("Stopped video for " + device.name)
+        return
+    adbdevice.scrspyproc.kill()
+    print("Stopped video for " + adbdevice.name)
 
 
 if __name__ == "__main__":
@@ -238,6 +268,7 @@ if __name__ == "__main__":
         reconnectToLastIp()
 
     connectToNewHeadsets()
+    started = True
 
     startScrcpy()
     while lastkey != Key.esc:
