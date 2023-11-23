@@ -26,9 +26,14 @@ for m in get_monitors():
 captureWidth = int(monitor.width / windowsPerLine)
 captureHeight = int(monitor.height / windowLines)
 
-cropWidth = 1600
-cropXOffset = 75
-cropYOffset = 450
+# Quest 2
+# cropWidth = 1600
+# cropXOffset = 75
+# cropYOffset = 450
+
+cropWidth = 1800
+cropXOffset = 125
+cropYOffset = 575
 
 cropFactor = cropWidth / captureWidth
 cropHeight = int(captureHeight * cropFactor)
@@ -101,8 +106,9 @@ class AdbDevice:
             + str(self.xposition)
             + " --window-y="
             + str(self.yposition)
-            + " --window-title="
+            + ' --window-title="'
             + self.name
+            + '"'
         )
         time.sleep(0.5)
 
