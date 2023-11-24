@@ -21,3 +21,5 @@ When you're done press escape to close everything.
 ## Using the script after initial setup
 
 This script will save the last known ip of your Quests. solong as you only leave them in sleep mode and don't turn them off, the script will always directly connect to your Quests by wifi (no need to plug them by usb anymore). If you didn't set a fixed ip for your Quests and their ip changed or, if your turned them off; just plug them back with an usb cable and they'll be setup for wifi use again.
+
+TODO: Add detail for headset video feed restarting using keypad.
