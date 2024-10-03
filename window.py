@@ -1,47 +1,170 @@
-import os
 import re
 import socket
 import subprocess
 from time import sleep
-from usbmonitor import USBMonitor
+from usbmonitor import USBMonitor  # pip install usb-monitor
 from usbmonitor.attributes import ID_MODEL, ID_MODEL_ID, ID_VENDOR_ID
-import PySimpleGUI as sg
+from screeninfo import get_monitors  # pip install screeninfo
+import PySimpleGUI as sg  # pip install PySimpleGUI
 import adbutils  # pip install adbutils
 import threading
 import json
+
+# sg.main()
 
 adb = adbutils.AdbClient(host="127.0.0.1", port=5037)
 jsonDevices = json.load(open("headsets.json"))
 font = ("Courier New", 11)
 currentWindow = None
+mainWindow = None
 
 newDevice = False
 tableUpdate = True
 stopThreads = False
 currentdevices = [""]
 
+screen = ""
+for m in get_monitors():
+    if m.is_primary:
+        screen = m
+        print("Using " + str(screen))
+
+fps = "30"
+bitrate = "1M"
+# Quest 3
+cropWidth = 1930
+cropXOffset = 140
+cropYOffset = 500
+
+windowsPerLine = 3
+windowLines = 3
+captureWidth = int(screen.width / windowsPerLine)
+captureHeight = int(screen.height / windowLines)
+cropFactor = cropWidth / captureWidth
+cropHeight = int(captureHeight * cropFactor)
+
+
+crop = (
+    str(cropWidth)
+    + ":"
+    + str(cropHeight)
+    + ":"
+    + str(cropXOffset)
+    + ":"
+    + str(cropYOffset)
+)
+
+
+class Layout:
+    list = json.load(open("layout.json"))
+
+    def __init__(self):
+        next
+
+    def getHeadsetIdFromGridId(self, gridId):
+        for i in self.list:
+            if int(i["gridId"]) == int(gridId):
+                return i["headsetId"]
+        return None
+
+    def getIdFromHeadsetId(self, headsetId):
+        self.list = json.load(open("layout.json"))
+        for i in self.list:
+            if int(i["headsetId"]) == int(headsetId):
+                return int(i["gridId"])
+        return None
+
+    def updateEntry(self, gridId, headsetId):
+        for entry in self.list:
+            if entry["gridId"] == gridId:
+                entry["headsetId"] = headsetId
+                self.updateJson()
+                return
+
+        self.list.append(
+            {
+                "gridId": gridId,
+                "headsetId": headsetId,
+            }
+        )
+        self.updateJson()
+        return
+
+    def updateJson(self):
+        jsonLayout = []
+        for key in self.list:
+            if key["headsetId"] != "":
+                jsonLayout.append(key)
+
+        json_object = json.dumps(jsonLayout, indent=4)
+        with open("layout.json", "w") as outfile:
+            outfile.write(json_object)
+
+
+gridLayout = Layout()
+
 
 class AdbDevice:
-    selftestthread = None
-    lostconnect = False
-
-    def __init__(self, name, id, ip, mac, connected=False):
+    def __init__(self, name, id, ip, serial, connected=False):
         self.name = name
         self.id = id
         self.ip = ip
-        self.mac = mac
+        self.serial = serial
         self.connected = connected
+
+        self.scrspyproc = None
+
+        self.selftestthread = None
+        self.lostconnect = False
 
     def __repr__(self):
         return f"{self.name}"
 
+    def start_scrcpy(self):
+        if self.scrspyproc is None:
+            gridId = gridLayout.getIdFromHeadsetId(headsetId=self.id)
+            if gridId is not None:
+                xindex = int(captureWidth) * gridId
+                xposition = str(xindex % (screen.width - 1))
+                yposition = str(
+                    max(0, int(gridId / windowsPerLine)) * int(screen.height / 3)
+                )
+
+                self.scrspyproc = subprocess.Popen(
+                    ".\scrcpy\scrcpy.exe -n --window-borderless --disable-screensaver --no-audio --rotation-offset=22 --video-codec=h265 --crop "
+                    + crop
+                    + " --max-fps="
+                    + fps
+                    + " -b "
+                    + bitrate
+                    + " -s "
+                    + self.ip
+                    + " --max-size "
+                    + str(captureWidth)
+                    + " --window-x="
+                    + str(xposition)
+                    + " --window-y="
+                    + str(yposition)
+                    + " --window-title="
+                    + "'"
+                    + self.name
+                    + "'"
+                )
+
+    def stop_scrcpy(self):
+        if self.scrspyproc is not None:
+            self.scrspyproc.kill()
+            self.scrspyproc = None
+            print("Stopped video for " + self.serial, self.name)
+
     def start_watchdog(self):
         if self.selftestthread is None:
-            print("Starting watchdog for", self.mac)
-            self.selftestthread = threading.Thread(
-                target=self.selftest, args=(), kwargs={}
-            )
-            self.selftestthread.start()
+            if self.ip != "":
+                print("Starting watchdog for", self.serial, self.name)
+                self.selftestthread = threading.Thread(
+                    target=self.selftest, args=(), kwargs={}
+                )
+                self.selftestthread.start()
 
     def check_port(self, port=5555, timeout=2):
         sck = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
@@ -75,45 +198,61 @@ class AdbDevice:
                         if not self.connected:
                             if self.check_port():
                                 self.connect()
-                except:
+                except Exception as err:
+                    print(err)
                     pass
+
             sleep(2)
 
     def toJson(self):
-        return {"id": self.id, "mac": self.mac, "name": self.name, "ip": self.ip}
+        return {
+            "id": self.id,
+            "name": self.name,
+            "ip": self.ip,
+            "serial": self.serial,
+        }
 
     def toList(self):
-        return [self.connected, self.name, self.id, self.ip, self.mac]
+        return [self.connected, self.name, self.id, self.ip, self.serial]
 
     def connect(self):
         global tableUpdate
         try:
             self.start_watchdog()
             if self.ip != "":
-                print("connecting to", self.ip)
-                adb.connect(addr=self.ip + ":5555", timeout=5)
+                print(
+                    "Connecting to",
+                    self.serial,
+                    "%s" % self.name if self.name != "" else self.ip,
+                )
+                adb.connect(addr=self.ip + ":5555", timeout=3)
                 self.connected = True
                 self.lostconnect = False
                 tableUpdate = True
             else:
-                print("no known ip for", self.mac)
+                print("no known ip for", self.serial)
         except:
-            print("couldn't connect to", self.ip)
-            self.ip = ""
+            print("couldn't connect to", self.serial)
+            # self.ip = ""
             self.connected = False
             tableUpdate = True
 
     def disconnect(self):
         global tableUpdate
         try:
-            print("Disconnecting from", self.mac, self.name)
+            print("Disconnecting from", self.serial, self.name)
             try:
-                currentdevices.remove(self.mac)
+                currentdevices.remove(self.serial)
             except:
                 pass
             adb.disconnect(addr=self.ip + ":5555")
 
             self.connected = False
+            try:
+                self.scrspyproc.kill()
+            except:
+                pass
+            self.scrspyproc = None
             # self.ip = ""
         except Exception as error:
             print(error)
@@ -132,7 +271,7 @@ class AdbDevices:
                     name=device["name"],
                     id=device["id"],
                     ip=device["ip"],
-                    mac=device["mac"].upper(),
+                    serial=device["serial"],
                 )
             )
 
@@ -140,8 +279,8 @@ class AdbDevices:
         global tableUpdate
         self.adblist.remove(value)
         try:
-            print("Removing ", value.ip)
-            currentdevices.remove(value.mac)
+            print("Removing", value.serial, value.name)
+            currentdevices.remove(value.serial)
             adb.disconnect(addr=value.ip + ":5555")
             tableUpdate = True
         except Exception as error:
@@ -153,7 +292,7 @@ class AdbDevices:
         # print("Adding device to list")
         found = False
         for device in self.adblist:
-            if device.mac == value.mac:
+            if device.serial == value.serial:
                 device.connected = True
                 device.ip = value.ip
                 found = True
@@ -170,13 +309,16 @@ class AdbDevices:
         index = 0
         for device in self.adblist:
             index += 1
-            currentWindow.set_title(
-                f"OculusViewer Setup - Connecting to last known ip's... {index}/{len(self.adblist)}"
-            )
-            if device.ip != "":
-                device.connect()
-        currentWindow.set_title("OculusViewer Setup")
-        self.updateJson()
+            try:
+                mainWindow.set_title(
+                    f"OculusViewer Setup - Connecting to last known ip's... {index}/{len(self.adblist)}"
+                )
+                if device.ip != "":
+                    device.connect()
+
+                mainWindow.set_title("OculusViewer Setup")
+            except:
+                exit("Errored out on reconnect")
 
     def kill_server(self):
         global tableUpdate
@@ -211,130 +353,76 @@ class AdbDevices:
         with open("headsets.json", "w") as outfile:
             outfile.write(json_object)
 
-
-class Layout:
-    list = json.load(open("layout.json"))
-
-    def __init__(self):
-        next
-
-    def getIdFromFromGridId(self, gridId):
-        for i in self.list:
-            if i["gridId"] == gridId:
-                return i["headsetId"]
-
-    def updateJson(self):
-        jsonLayout = []
-        for key in self.list:
-            if key["headsetId"] != "":
-                jsonLayout.append(key)
-
-        json_object = json.dumps(jsonLayout, indent=4)
-        with open("layout.json", "w") as outfile:
-            outfile.write(json_object)
+    def addExistingDevices(self):
+        print("Adding existing devices")
+        for device in self.jsonadblist:
+            if device.serial not in currentdevices:
+                self.adblist.append(device)
+                device.start_watchdog()
 
 
 devices = AdbDevices()
-gridLayout = Layout()
 
 
-def connectToExistingDevices():
-    print("Connecting to existing devices")
-    # Searching for devices already connected to the computer
-    global tableUpdate
-    global currentWindow
-    adbdevices = adb.device_list()
-    for device in adbdevices:
-        name = ""
-        id = -1
-        ip = device.wlan_ip()
-        wlan = device.shell("ip addr show wlan0")
-        mac = (
-            re.search("link/ether ..:..:..:..:..:..", wlan)
-            .group()
-            .replace("link/ether ", "")
-        ).upper()
+# def connectToNewDevice():
+#     try:
+#         global tableUpdate
+#         global newDevice
+#         newDevice = False
+#         mainWindow.set_title("OculusViewer Setup - New device?")
+#         adbdevices = adb.device_list()
+#         for device in adbdevices:
+#             serial = device.serial
+#             ip = device.wlan_ip()
 
-        if not mac in currentdevices:
-            for i in jsonDevices["headsets"]:
-                if mac == str(i["mac"]).upper():
-                    id = i["id"]
-                    name = i["name"]
-                    break
-            adbDevice = AdbDevice(ip=ip, mac=mac, name=name, id=id, connected=True)
-            print(
-                "found",
-                adbDevice.mac,
-                adbDevice.name if adbDevice.name != "" else adbDevice.ip,
-            )
-            devices.adblist.append(adbDevice)
-            adbDevice.start_watchdog()
-            tableUpdate = True
-            currentdevices.append(mac)
+#         for device in adbdevices:
+#             serial = device.serial
+#             ip = device.wlan_ip()
+#             wlan = device.shell("ip addr show wlan0")
+#             name = ""
+#             id = -1
+#             mac = (
+#                 re.search("link/ether ..:..:..:..:..:..", wlan)
+#                 .group()
+#                 .replace("link/ether ", "")
+#             ).upper()
 
-    for device in devices.jsonadblist:
-        if device.mac not in currentdevices:
-            devices.adblist.append(device)
-            device.start_watchdog()
+#             if not mac in currentdevices:
+#                 if ip not in serial:
+#                     mainWindow.set_title("OculusViewer Setup - Adding new device...")
+#                     # print(mac, " is not in current device list")
+#                     device.tcpip(port=5555)
+#                     adb.connect(addr=ip, timeout=10)
+#                     ip = device.wlan_ip()
+#                     serial = device.serial
+#                     sleep(2)
 
+#                 if ip in serial:
+#                     for i in jsonDevices["headsets"]:
+#                         if mac == str(i["mac"]).upper():
+#                             id = i["id"]
+#                             name = i["name"]
+#                             break
 
-def connectToNewDevice():
-    try:
-        global tableUpdate
-        global newDevice
-        adbdevices = adb.device_list()
-        for device in adbdevices:
-            serial = device.serial
-            ip = device.wlan_ip()
+#                     print("Adding", mac, name)
 
-        for device in adbdevices:
-            serial = device.serial
-            ip = device.wlan_ip()
-            wlan = device.shell("ip addr show wlan0")
-            name = ""
-            id = -1
-            mac = (
-                re.search("link/ether ..:..:..:..:..:..", wlan)
-                .group()
-                .replace("link/ether ", "")
-            ).upper()
-
-            if not mac in currentdevices:
-                if ip not in serial:
-                    currentWindow.set_title("OculusViewer Setup - Adding new device...")
-                    # print(mac, " is not in current device list")
-                    device.tcpip(port=5555)
-                    adb.connect(addr=ip, timeout=10)
-                    ip = device.wlan_ip()
-                    serial = device.serial
-                    sleep(2)
-
-                if ip in serial:
-                    for i in jsonDevices["headsets"]:
-                        if mac == str(i["mac"]).upper():
-                            id = i["id"]
-                            name = i["name"]
-                            break
-
-                    print("Adding", mac, name)
-
-                    adbDevice = AdbDevice(
-                        ip=ip, mac=mac, name=name, id=id, connected=True
-                    )
-                    devices.add(adbDevice)
-                    adbDevice.start_watchdog()
-                    currentdevices.append(mac)
-                    newDevice = False
-                    tableUpdate = True
-            else:
-                pass
-    except Exception as error:
-        # print(error)
-        pass
-    try:
-        currentWindow.set_title("OculusViewer Setup")
-    except:
-        pass
+#                     adbDevice = AdbDevice(
+#                         ip=ip, mac=mac, name=name, id=id, connected=True
+#                     )
+#                     devices.add(adbDevice)
+#                     adbDevice.start_watchdog()
+#                     currentdevices.append(mac)
+#                     newDevice = False
+#                     tableUpdate = True
+#             else:
+#                 pass
+#     except Exception as error:
+#         # print(error)
+#         pass
+#     try:
+#         mainWindow.set_title("OculusViewer Setup")
+#     except:
+#         pass
 
 
 def block_focus(window):
@@ -406,6 +494,190 @@ def editDevice_popup(deviceId):
     return None
 
 
+def addDevice_popup():
+    global tableUpdate
+    global newDevice
+    global currentWindow
+    oldDevicesList = [device.serial for device in adb.device_list()]
+    newDevicesList = []
+    devicesDiff = []
+
+    print("Old device list :", oldDevicesList)
+    window = sg.Window(
+        "New Device",
+        [[sg.Text("Waiting for a new device...")]],
+        use_default_focus=False,
+        finalize=True,
+        modal=True,
+    )
+    block_focus(window)
+    currentWindow = window
+
+    # We're waiting for a new android device to be connected.
+    while True:
+        event, values = window.Read(timeout=100)
+        if event == "Exit" or event == sg.WIN_CLOSED:
+            window.close()
+            return
+
+        if newDevice == True:
+            sleep(1)
+            newDevice = False
+            newDevicesList = [device.serial for device in adb.device_list()]
+            print("New device list:", newDevicesList)
+
+            devicesDiff = [
+                item for item in newDevicesList if item not in oldDevicesList
+            ]
+
+            if len(devicesDiff) > 0:
+                print("Found new device:", devicesDiff)
+                window.close()
+                break
+            else:
+                # We update the old device list if a device has been disconnected
+                oldDevicesList = [device.serial for device in adb.device_list()]
+    # Exited first window, found a new device.
+
+    try:
+        # We check the wifi on which the device is connected to.
+        d = adb.device(serial=devicesDiff[0])
+        pattern = r'(?:wifiNetworkKey|networkId)="([^"]+)"'
+        wlan0 = d.shell("dumpsys netstats | grep -E 'iface=wlan.'")
+        wifiName = re.findall(pattern, wlan0)
+        sentence = (
+            "connected to " + wifiName[0]
+            if len(wifiName) > 0
+            else "not connected to wifi."
+        )
+
+        if (
+            sg.popup_yes_no(
+                "Found the new device "
+                + devicesDiff[0]
+                + ".\nIt is currently "
+                + sentence
+                + ".\nDo you wish to connect to it ?"
+            )
+            != "Yes"
+        ):
+            return  # If user said no, we end here.
+
+        if len(wifiName) == 0:
+            sg.popup_error("Your device needs to be connected to wifi.")
+            return
+
+        # If user said yes, we try to enable wireless debugging.
+        deviceserial = d.serial
+        ip = d.wlan_ip()
+
+        # We first check that the device isn't already connected
+        if deviceserial in currentdevices:
+            sg.popup(deviceserial + " is already connected !")
+            return
+
+        print(deviceserial, " is not in current device list")
+        mainWindow.set_title("OculusViewer Setup - Adding " + deviceserial + "...")
+
+        # If the device isn't already in wifi debug mode, we enable it
+        if ip not in deviceserial:
+            print("Enabling wifi debugging for " + deviceserial)
+            d.tcpip(port=5555)
+            sleep(2)  # We wait just a bit
+
+        # we then connect to the device
+        adb.connect(addr=ip, timeout=5)
+        d = adb.device(serial=ip + ":5555")
+        print("We connected to", deviceserial + " (" + d.serial + ") !")
+
+    # If anything happens during wifi debug init or connection, we error out.
+    except Exception as error:
+        print("We had an unexpected error :", error)
+        sg.popup_error(
+            "Unexpected error :",
+            error,
+            "\nMake sure you are connected to the right wifi network on the device.",
+        )
+        mainWindow.set_title("OculusViewer Setup")
+        return
+
+    # We found a new android device in debug mode and connected to it. we're adding it to the list !
+    col_layout = [[sg.Button("OK", key="-OK-")]]
+    layout = [
+        [
+            sg.Text("New device: " + deviceserial + " (" + d.serial + ")"),
+        ],
+        [
+            sg.Text("New id : "),
+            sg.Input(
+                "",
+                enable_events=True,
+                key="-ID_INPUT-",
+                expand_x=True,
+                justification="left",
+            ),
+        ],
+        [
+            sg.Text("New name : "),
+            sg.Input(
+                "",
+                enable_events=True,
+                key="-NAME_INPUT-",
+                expand_x=True,
+                justification="left",
+            ),
+        ],
+        [sg.Column(col_layout, expand_x=True, element_justification="right")],
+    ]
+    window = sg.Window(
+        "Adding Device",
+        layout,
+        use_default_focus=False,
+        finalize=True,
+        modal=True,
+    )
+    block_focus(window)
+    currentWindow = window
+
+    while True:
+        event, values = window.read()
+        if event == "Exit" or event == sg.WIN_CLOSED:
+            window.close()
+            break
+
+        # if last char entered not a digit
+        if (
+            event == "-ID_INPUT-"
+            and len(values["-ID_INPUT-"])
+            and values["-ID_INPUT-"][-1] not in ("-0123456789")
+        ):
+            # delete last char from input
+            window["-ID_INPUT-"].update(values["-ID_INPUT-"][:-1])
+
+        elif event == "-OK-":
+            if len(values["-ID_INPUT-"]) > 0 and len(values["-NAME_INPUT-"]) > 0:
+                print("Adding", deviceserial, values["-NAME_INPUT-"])
+
+                adbDevice = AdbDevice(
+                    ip=ip,
+                    name=values["-NAME_INPUT-"],
+                    id=values["-ID_INPUT-"],
+                    serial=deviceserial,
+                    connected=True,
+                )
+                devices.add(adbDevice)
+                adbDevice.start_watchdog()
+                currentdevices.append(deviceserial)
+                devices.updateJson()
+
+                tableUpdate = True
+                window.close()
+                break
+
+    mainWindow.set_title("OculusViewer Setup")
+    return None
+
+
 def settings_screen():
     def callback(event):
         x, y = window.TKroot.winfo_pointerxy()
@@ -417,6 +689,7 @@ def settings_screen():
     global newDevice
     global tableUpdate
     global currentWindow
+    global mainWindow
 
     # ----- Full layout -----
     rows = 3
@@ -426,17 +699,10 @@ def settings_screen():
     gridId = 0
     dropdown = [""]
     for col in range(cols):
-        for row in range(rows):
-            dropdown.append(gridId)
-            gridId += 1
-    gridId = 0
-    for col in range(cols):
         temp = []
         for row in range(rows):
-            try:
-                headsetId = int(gridLayout.getIdFromFromGridId(gridId=gridId)) + 1
-            except:
-                headsetId = 0
+            dropdown.append(gridId)
+            HeadsetId = gridLayout.getHeadsetIdFromGridId(gridId)
 
             temp.append(
                 sg.Frame(
@@ -444,7 +710,9 @@ def settings_screen():
                         [
                             sg.Combo(
                                 values=dropdown,
-                                default_value=dropdown[headsetId],
+                                default_value=(
+                                    HeadsetId if HeadsetId is not None else ""
+                                ),
                                 expand_x=True,
                                 enable_events=True,
                                 readonly=True,
@@ -459,7 +727,7 @@ def settings_screen():
             gridId += 1
         grid.append(temp)
 
-    headings = ["Connected", "Name", "Id", "Ip", "Mac"]
+    headings = ["Connected", "Name", "Id", "Ip", "Serial"]
     device_list = [
         [
             sg.Text("Current devices : "),
@@ -470,13 +738,14 @@ def settings_screen():
                 headings=headings,
                 auto_size_columns=False,
                 def_col_width=20,
-                num_rows=10,
+                num_rows=30,
                 font=font,
                 col_widths=[
                     11,
                     20,
                     5,
                     17,
+                    21,
                     21,
                 ],
                 expand_x=True,
@@ -489,7 +758,6 @@ def settings_screen():
             )
         ],
         [
-            sg.Button("Start OculusViewer", enable_events=True, key="-START-"),
             sg.Column(
                 [
                     [
@@ -536,10 +804,34 @@ def settings_screen():
     menu_def = [
         [
             "Devices",
-            ["Reconnect", "Kill Server"],
+            ["Initiate Wifi Debugging", "Add New Device"],
         ],
+        ["Server", ["Reconnect to all IPs", "Kill Server"]],
         ["Help", "About..."],
     ]
+    grid.append(
+        [
+            sg.Button(
+                "Start Streaming",
+                enable_events=True,
+                key="-START-",
+                expand_x=True,
+                expand_y=True,
+            )
+        ]
+    )
+    grid.append(
+        [
+            sg.Button(
+                "Stop Streaming",
+                enable_events=True,
+                key="-STOP-",
+                expand_x=True,
+                expand_y=True,
+                button_color="red",
+            )
+        ],
+    )
     layout = [
         [
             [sg.Menu(menu_def)],
@@ -554,17 +846,20 @@ def settings_screen():
     table = window["-TABLE-"].Widget
     table_frame = window["-TABLE-"].table_frame
     window.TKroot.bind("<ButtonRelease-1>", callback, add="+")
-    currentWindow = window
+    currentWindow = mainWindow = window
+    data_selected = []
 
-    newdevicethread = threading.Thread(target=connectToNewDevice, args=(), kwargs={})
+    # newdevicethread = threading.Thread(target=connectToNewDevice, args=(), kwargs={})
     reconnectdevicesthread = threading.Thread(
         target=devices.reconnect, args=(), kwargs={}
     )
+    # reconnectdevicesthread.start()
 
     def updateTable():
         devices.sort()
         # print(devices.toList())
         window["-TABLE-"].Update(values=devices.toList())
+
         colorTuple = ()
         index = 0
         for device in devices.adblist:
@@ -577,28 +872,47 @@ def settings_screen():
             index += 1
 
         window["-TABLE-"].Update(row_colors=(tuple(colorTuple)))
+        try:
+            window["-TABLE-"].Update(select_rows=data_selected)
+        except:
+            window["-TABLE-"].Update(select_rows=[])
+
+    def unselectTable():
+        window["-EDIT_DEVICE-"].Update(visible=False)
+        window["-REMOVE_DEVICE-"].Update(visible=False)
+        window["-CONNECT_DEVICE-"].Update(visible=False)
+        window["-TABLE-"].Update(select_rows=[])
 
     while True:
-        event, values = window.Read(timeout=30)
+        event, values = window.Read(timeout=100)
         if event == "Exit" or event == sg.WIN_CLOSED:
             window.close()
             break
 
-        elif event == "WINDOW_CLICK":
-            window["-EDIT_DEVICE-"].Update(visible=False)
-            window["-REMOVE_DEVICE-"].Update(visible=False)
-            window["-CONNECT_DEVICE-"].Update(visible=False)
-            window["-TABLE-"].Update(select_rows=[])
+        # elif event == "WINDOW_CLICK":
+        #     window["-EDIT_DEVICE-"].Update(visible=False)
+        #     window["-REMOVE_DEVICE-"].Update(visible=False)
+        #     window["-CONNECT_DEVICE-"].Update(visible=False)
+        #     window["-TABLE-"].Update(select_rows=[])
+        elif event == "Add New Device":
+            unselectTable()
+            addDevice_popup()
 
         elif event == "Kill Server":
+            unselectTable()
             devices.kill_server()
 
-        elif event == "Reconnect":
+        elif event == "Reconnect to all IPs":
+            unselectTable()
             if not reconnectdevicesthread.is_alive():
                 reconnectdevicesthread = threading.Thread(
                     target=devices.reconnect, args=(), kwargs={}
                 )
                 reconnectdevicesthread.start()
+
+        elif event == "Initiate Wifi Debugging":
+            unselectTable()
+            addDevice_popup()
 
         elif event == "-TABLE-":
             data_selected = values[event]
@@ -615,32 +929,31 @@ def settings_screen():
             deviceId = values["-TABLE-"]
             if len(deviceId) > 0:
                 editDevice_popup(deviceId[0])
-                window["-CONNECT_DEVICE-"].Update(visible=False)
-                window["-EDIT_DEVICE-"].Update(visible=False)
-                window["-REMOVE_DEVICE-"].Update(visible=False)
                 currentWindow = window
 
         elif "-DROPDOWN_" in event:
+            unselectTable()
             for i in range(rows * cols):
-                try:
-                    value = values["-DROPDOWN_" + str(i) + "-"]
-                    gridLayout.list[i]["headsetId"] = value
-                except Exception as error:
-                    gridLayout.list.append(
-                        {
-                            "gridId": i,
-                            "headsetId": value,
-                        }
-                    )
-            gridLayout.updateJson()
+                value = values["-DROPDOWN_" + str(i) + "-"]
+                gridLayout.updateEntry(gridId=i, headsetId=value)
+                window["-CONNECT_DEVICE-"].Update(visible=False)
+
+            for i in range(rows * cols):
+                HeadsetId = gridLayout.getHeadsetIdFromGridId(gridId=i)
+                window["-DROPDOWN_" + str(i) + "-"].update(
+                    HeadsetId if HeadsetId is not None else ""
+                )
 
         elif event == "-CONNECT_DEVICE-":
+            # If device is connected, we disconnect and unselect the table
             if devices.adblist[values["-TABLE-"][0]].connected:
                 devices.adblist[values["-TABLE-"][0]].disconnect()
             else:
-                print("Reconnecting")
+                # If device is not connected, we connect to it.
+                devices.adblist[values["-TABLE-"][0]].connect()
 
         elif event == "-REMOVE_DEVICE-":
+            unselectTable()
             if (
                 sg.popup_ok_cancel(
                     "This will remove "
@@ -657,19 +970,23 @@ def settings_screen():
                 next
 
         elif event == "-START-":
-            print("Starting View")
-            updateTable()
+            unselectTable()
+            print("Starting Streaming")
+            for device in sorted(devices.adblist, key=lambda device: device.id):
+                if device.connected:
+                    device.start_scrcpy()
+                else:
+                    print(device.name, "is not connected, skipping")
+
+        elif event == "-STOP-":
+            unselectTable()
+            for device in sorted(devices.adblist, key=lambda device: device.id):
+                if device.scrspyproc is not None:
+                    device.stop_scrcpy()
 
         elif tableUpdate:
             tableUpdate = False
             updateTable()
-
-        if newDevice == True:
-            if not newdevicethread.is_alive():
-                newdevicethread = threading.Thread(
-                    target=connectToNewDevice, args=(), kwargs={}
-                )
-                newdevicethread.start()
 
 
 device_info_str = (
@@ -679,15 +996,15 @@ device_info_str = (
 
 # Define the `on_connect` and `on_disconnect` callbacks
 def on_connect(device_id, device_info):
-    # print(f"Connected: {device_info_str(device_info=device_info)}")
+    print(f"Connected: {device_info_str(device_info=device_info)}")
     global newDevice
     newDevice = True
 
 
 def on_disconnect(device_id, device_info):
-    # print(f"Disconnected: {device_info_str(device_info=device_info)}")
+    print(f"Disconnected: {device_info_str(device_info=device_info)}")
     global newDevice
-    newDevice = False
+    newDevice = True
 
 
 # Create the USBMonitor instance
@@ -697,9 +1014,12 @@ monitor = USBMonitor()
 monitor.start_monitoring(on_connect=on_connect, on_disconnect=on_disconnect)
 
 # ... Rest of your code ...
-connectToExistingDevices()
+devices.addExistingDevices()
 settings_screen()
 
 # If you don't need it anymore stop the daemon
 monitor.stop_monitoring()
 stopThreads = True
+
+for device in devices.adblist:
+    device.stop_scrcpy()

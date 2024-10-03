@@ -12,8 +12,8 @@ adb = adbutils.AdbClient(host="127.0.0.1", port=5037)
 lastkey = None
 started = False
 
-fps = "30"
-bitrate = "1M"
+fps = "10"
+bitrate = "512K"
 windowsPerLine = 3
 windowLines = 3
 
@@ -31,8 +31,9 @@ captureHeight = int(monitor.height / windowLines)
 # cropXOffset = 75
 # cropYOffset = 450
 
-cropWidth = 1800
-cropXOffset = 125
+# Quest 3
+cropWidth = 1600
+cropXOffset = 175
 cropYOffset = 575
 
 cropFactor = cropWidth / captureWidth
@@ -91,6 +92,7 @@ class AdbDevice:
     id = int(-1)
 
     def startScrCpy(self):
+        print("X:" + str(self.xposition) + ", Y:" + str(self.yposition))
         self.scrspyproc = subprocess.Popen(
             ".\scrcpy\scrcpy.exe -n --window-borderless --disable-screensaver --no-audio --video-codec=h265 --crop "
             + crop
@@ -106,7 +108,8 @@ class AdbDevice:
             + str(self.xposition)
             + " --window-y="
             + str(self.yposition)
-            + ' --window-title="'
+            + " --window-title="
+            + '"'
             + self.name
             + '"'
         )
@@ -123,12 +126,12 @@ class AdbDevice:
 
             for i in JsonDevices["headsets"]:
                 if self.mac == str(i["mac"]).lower():
-                    self.id = i["id"]
+                    self.id = int(i["id"])
                     self.name = i["name"]
                     i["ip"] = self.ip
 
                     xindex = int(captureWidth) * self.id
-                    self.xposition = str(xindex % monitor.width)
+                    self.xposition = str(xindex % (monitor.width - 1))
                     self.yposition = str(
                         max(0, int(self.id / windowsPerLine)) * int(monitor.height / 3)
                     )
@@ -164,22 +167,25 @@ def connectToNewHeadsets():
 
     global lastkey
     while lastkey == None:
-        devices = adb.device_list()
+        try:
+            devices = adb.device_list()
 
-        for device in devices:
-            serial = device.serial
-            ip = device.wlan_ip()
-            if not ip in currentdevices:
-                if ip not in serial:
-                    device.tcpip(port=5555)
-                    adb.connect(addr=ip, timeout=5)
-                    serial = device.serial
+            for device in devices:
+                serial = device.serial
+                ip = device.wlan_ip()
+                if not ip in currentdevices:
+                    if ip not in serial:
+                        device.tcpip(port=5555)
+                        adb.connect(addr=ip, timeout=5)
+                        serial = device.serial
 
-                if ip in serial:
-                    wlan = device.shell("ip addr show wlan0")
-                    AdbDevice(serial=serial, wlan=wlan)
+                    if ip in serial:
+                        wlan = device.shell("ip addr show wlan0")
+                        AdbDevice(serial=serial, wlan=wlan)
 
-                    currentdevices.append(ip)
+                        currentdevices.append(ip)
+        except:
+            pass
     updateIpAdresses()
 
 
@@ -276,7 +282,11 @@ if __name__ == "__main__":
     connectToNewHeadsets()
     started = True
 
+    print("started !")
+
     startScrcpy()
+
+    print("started scrcpy !")
     while lastkey != Key.esc:
         pass
     stopScrcpy()
