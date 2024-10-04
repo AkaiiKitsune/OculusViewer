@@ -268,6 +268,8 @@ class AdbDevice:
 
                     currentdevices.append(self.serial)
                     tableUpdate = True
+                    if devices.streaming == True:
+                        self.start_scrcpy()
             else:
                 print("No known ip for", self.serial, self.name)
         except:
@@ -316,6 +318,7 @@ class AdbDevice:
 class AdbDevices:
     adblist = []
     jsonadblist = []
+    streaming = False
 
     def __init__(self, list=[]):
         self.adblist = list
@@ -370,10 +373,9 @@ class AdbDevices:
                 )
                 if device.ip != "":
                     device.connect()
-
-                mainWindow.set_title("OculusViewer Setup")
             except:
                 exit("Errored out on reconnect")
+        mainWindow.set_title("OculusViewer Setup")
 
     def kill_server(self):
         global tableUpdate
@@ -414,6 +416,28 @@ class AdbDevices:
             if device.serial not in self.adblist:
                 self.adblist.append(device)
                 device.start_watchdog()
+
+    def stream(self, streamingStatus: bool):
+        self.streaming = streamingStatus
+        if streamingStatus == True:
+            print("Starting Streaming")
+            for device in sorted(devices.adblist, key=lambda device: device.id):
+                if device.connected:
+                    device.start_scrcpy()
+                    if gridLayout.getIdFromHeadsetId(headsetId=device.id) != None:
+                        sleep(2)
+                    else:
+                        print(
+                            device.serial,
+                            device.name,
+                            "is not assigned a position, skipping",
+                        )
+                else:
+                    print(device.serial, device.name, "is not connected, skipping")
+        else:
+            for device in sorted(devices.adblist, key=lambda device: device.id):
+                if device.scrspyproc is not None:
+                    device.stop_scrcpy()
 
 
 devices = AdbDevices()
@@ -938,7 +962,7 @@ def settings_screen():
     menu_def = [
         [
             "Devices",
-            ["Initiate Wifi Debugging", "Add New Device"],
+            ["Add New Device", "Initiate Known Devices"],
         ],
         ["Server", ["Reconnect to all IPs", "Kill Server"]],
         ["Help", "About..."],
@@ -951,11 +975,7 @@ def settings_screen():
                 key="-START-",
                 expand_x=True,
                 expand_y=True,
-            )
-        ]
-    )
-    grid.append(
-        [
+            ),
             sg.Button(
                 "Stop Streaming",
                 enable_events=True,
@@ -963,8 +983,9 @@ def settings_screen():
                 expand_x=True,
                 expand_y=True,
                 button_color="red",
-            )
-        ],
+                visible=False,
+            ),
+        ]
     )
     layout = [
         [
@@ -1044,7 +1065,7 @@ def settings_screen():
                 )
                 reconnectdevicesthread.start()
 
-        elif event == "Initiate Wifi Debugging":
+        elif event == "Initiate Known Devices":
             unselectTable()
             enableDebug_popup()
 
@@ -1112,26 +1133,15 @@ def settings_screen():
 
         elif event == "-START-":
             unselectTable()
-            print("Starting Streaming")
-            for device in sorted(devices.adblist, key=lambda device: device.id):
-                if device.connected:
-                    device.start_scrcpy()
-                    if gridLayout.getIdFromHeadsetId(headsetId=device.id) != None:
-                        sleep(2)
-                    else:
-                        print(
-                            device.serial,
-                            device.name,
-                            "is not assigned a position, skipping",
-                        )
-                else:
-                    print(device.serial, device.name, "is not connected, skipping")
+            devices.stream(streamingStatus=True)
+            window["-START-"].Update(visible=False)
+            window["-STOP-"].Update(visible=True)
 
         elif event == "-STOP-":
             unselectTable()
-            for device in sorted(devices.adblist, key=lambda device: device.id):
-                if device.scrspyproc is not None:
-                    device.stop_scrcpy()
+            devices.stream(streamingStatus=False)
+            window["-START-"].Update(visible=True)
+            window["-STOP-"].Update(visible=False)
 
         elif event == "About...":
             os.system('start "" https://github.com/AkaiiKitsune/OculusViewer/')
