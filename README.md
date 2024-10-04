@@ -1,12 +1,10 @@
 # OculusViewer
 
- This is a shitty python script to display the screen of multiple Quest 2's at once on a single screen.
+ This is a shitty python script to display the screen of multiple Quest 3's at once on a single screen.
 
-![8 Quest 2's casting to a single screen](https://raw.githubusercontent.com/AkaiiKitsune/OculusViewer/main/img/Preview.png)
+![8 Quest 3's casting to a single screen](https://raw.githubusercontent.com/AkaiiKitsune/OculusViewer/main/img/Preview.png)
 
 ## First time using the script
-
-Unpack a copy of [scrcpy](https://github.com/Genymobile/scrcpy) in a folder named "scrcpy" next to the `view.py` file.
 
 You then need to add 1 to 9 headsets in the headsets.json file. The "id" will determine it's position on the screen (It will be displayed in a 3 by 3 grid from top left to bottom right).
 

@@ -1,0 +1,4 @@
+usb-monitor==1.21
+screeninfo==0.8.1
+pysimplegui==4.70.1
+adbutils==2.8.0
