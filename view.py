@@ -805,6 +805,7 @@ def enableDebug_popup():
                             for device in devices.adblist:
                                 if device.serial == deviceserial:
                                     device.connected = True
+                                    device.ip = d.wlan_ip()
                                     if deviceserial not in currentdevices:
                                         currentdevices.append(deviceserial)
                                     tableUpdate = True
